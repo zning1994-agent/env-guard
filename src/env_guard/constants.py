@@ -1,58 +1,84 @@
 """敏感信息检测的常量定义"""
 
+from typing import List, Pattern
 import re
 
-# 敏感键名模式（正则表达式，不区分大小写）
-SENSITIVE_KEY_PATTERNS = [
-    re.compile(r"^(api[_\-]?key|apikey)$", re.IGNORECASE),
-    re.compile(r"^(secret|password|passwd|pwd)$", re.IGNORECASE),
-    re.compile(r"^(token|auth|bearer|jwt)$", re.IGNORECASE),
-    re.compile(r"^(private[_\-]?key|privkey)$", re.IGNORECASE),
-    re.compile(r"^(access[_\-]?key|aws[_\-]?key)$", re.IGNORECASE),
-    re.compile(r"^(github[_\-]?token|gh[_\-]?token)$", re.IGNORECASE),
-    re.compile(r"^.*(credential|secret|token|key|password|auth).*$", re.IGNORECASE),
+# 敏感键名模式（正则）
+SENSITIVE_PATTERNS: List[str] = [
+    r"^(api[_-]?key|apikey)$",
+    r"^(secret|password|passwd|pwd)$",
+    r"^(token|auth|bearer|jwt)$",
+    r"^(private[_-]?key|privkey)$",
+    r"^(access[_-]?key|aws[_-]?key)$",
+    r"^.*(credential|secret|token|key|password|auth).*$",
 ]
 
-# 常见泄露模式（用于直接扫描文件内容）
-LEAK_PATTERNS = [
-    # OpenAI API Key
-    re.compile(r"sk-[a-zA-Z0-9]{20,}"),
-    # GitHub Personal Access Token
-    re.compile(r"ghp_[a-zA-Z0-9]{36,}"),
-    # GitHub OAuth Access Token
-    re.compile(r"gho_[a-zA-Z0-9]{36,}"),
-    # AWS Access Key ID
-    re.compile(r"AKIA[0-9A-Z]{16}"),
-    # AWS Secret Access Key (generic pattern)
-    re.compile(r"(?i)aws[_\-]?secret[_\-]?access[_\-]?key\s*[=:]\s*['\"]?[A-Za-z0-9/+=]{40}"),
-    # Private Key
-    re.compile(r"-----BEGIN (?:RSA |DSA |EC )?PRIVATE KEY-----"),
-    # Generic API Key pattern
-    re.compile(r"(?i)(?:api[_\-]?key|apikey)\s*[=:]\s*['\"]?[a-zA-Z0-9]{20,}"),
-    # Generic Secret pattern
-    re.compile(r"(?i)(?:secret|password|passwd|pwd)\s*[=:]\s*['\"]?[^\s'\"]{8,}"),
-    # JWT Token
-    re.compile(r"eyJ[a-zA-Z0-9]{10,}\.eyJ[a-zA-Z0-9]{10,}\.[a-zA-Z0-9_-]{10,}"),
+# 编译后的敏感键名正则
+SENSITIVE_REGEXES: List[Pattern] = [
+    re.compile(pattern, re.IGNORECASE) for pattern in SENSITIVE_PATTERNS
 ]
 
-# 高风险关键词（用于快速过滤）
-HIGH_RISK_KEYWORDS = [
-    "api_key",
-    "apikey",
-    "secret_key",
-    "secretkey",
-    "private_key",
-    "privatekey",
-    "access_token",
-    "access_token_secret",
-    "aws_access_key",
-    "aws_secret_key",
-    "github_token",
-    "gh_token",
+# 常见泄露模式（用于扫描文件内容）
+LEAK_PATTERNS: List[dict] = [
+    {
+        "name": "OpenAI API Key",
+        "pattern": r"sk-[a-zA-Z0-9]{20,}",
+        "severity": "critical",
+    },
+    {
+        "name": "GitHub Personal Access Token",
+        "pattern": r"ghp_[a-zA-Z0-9]{36,}",
+        "severity": "critical",
+    },
+    {
+        "name": "GitHub OAuth Token",
+        "pattern": r"gho_[a-zA-Z0-9]{36,}",
+        "severity": "critical",
+    },
+    {
+        "name": "AWS Access Key ID",
+        "pattern": r"AKIA[0-9A-Z]{16}",
+        "severity": "critical",
+    },
+    {
+        "name": "AWS Secret Access Key",
+        "pattern": r"(?i)aws(.{0,20})?['\"][0-9a-zA-Z\/+]{40}['\"]",
+        "severity": "critical",
+    },
+    {
+        "name": "Generic API Key",
+        "pattern": r"(?i)(api[_-]?key|apikey).{0,20}['\"][0-9a-zA-Z]{20,}['\"]",
+        "severity": "high",
+    },
+    {
+        "name": "Generic Secret",
+        "pattern": r"(?i)(secret|password|passwd|pwd).{0,20}['\"][^\s'\"]{8,}['\"]",
+        "severity": "high",
+    },
+    {
+        "name": "Bearer Token",
+        "pattern": r"(?i)bearer\s+[a-zA-Z0-9\-_.~+\/]+",
+        "severity": "high",
+    },
+    {
+        "name": "JWT Token",
+        "pattern": r"eyJ[a-zA-Z0-9]{10,}\.eyJ[a-zA-Z0-9]{10,}\.[a-zA-Z0-9_-]+",
+        "severity": "high",
+    },
+    {
+        "name": "Private Key",
+        "pattern": r"-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+        "severity": "critical",
+    },
 ]
 
-# .env 文件名模式
-ENV_FILENAME_PATTERNS = [
+# 编译后的泄露正则
+LEAK_REGEXES: List[Pattern] = [
+    re.compile(item["pattern"]) for item in LEAK_PATTERNS
+]
+
+# 常见的 .env 文件名
+ENV_FILENAMES: List[str] = [
     ".env",
     ".env.local",
     ".env.development",
@@ -60,15 +86,30 @@ ENV_FILENAME_PATTERNS = [
     ".env.test",
     ".env.staging",
     ".env.example",
-    ".env.sample",
-    ".env.dev",
-    ".env.prod",
     ".flaskenv",
-    ".djangoenv",
+    ".gevent",
 ]
 
-# 注释符号
-COMMENT_SYMBOLS = ["#", ";", "//"]
+# 高风险文件模式（这些文件通常包含敏感信息）
+HIGH_RISK_PATTERNS: List[str] = [
+    r"\.env$",
+    r"\.env\.",
+    r"secrets\.yaml$",
+    r"secrets\.yml$",
+    r"credentials\.json$",
+    r"\.pem$",
+    r"\.key$",
+    r"\.p12$",
+    r"\.pfx$",
+]
 
-# 引号符号
-QUOTE_SYMBOLS = ['"', "'"]
+# 严重级别
+SEVERITY_LEVELS = ["critical", "high", "medium", "low"]
+
+# 严重级别颜色映射（用于 rich 输出）
+SEVERITY_COLORS = {
+    "critical": "red",
+    "high": "orange1",
+    "medium": "yellow",
+    "low": "green",
+}

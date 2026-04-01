@@ -1,30 +1,42 @@
-"""env-guard - Git 敏感信息泄露检测与修复工具"""
+"""env-guard - Git 敏感信息泄露检测与修复工具
+
+用于检测 .env 文件、staged files 和 git history 中的敏感信息泄露
+"""
 
 __version__ = "0.1.0"
-__author__ = "env-guard contributors"
+__author__ = "env-guard"
+__license__ = "MIT"
 
-from .scanner import EnvScanner, LeakScanner, SensitiveEntry, ScanResult, SensitivityLevel, scan_env_files
 from .constants import (
-    SENSITIVE_KEY_PATTERNS,
+    ENV_FILENAMES,
+    HIGH_RISK_PATTERNS,
     LEAK_PATTERNS,
-    HIGH_RISK_KEYWORDS,
-    ENV_FILENAME_PATTERNS,
+    SEVERITY_COLORS,
+    SEVERITY_LEVELS,
+    SENSITIVE_PATTERNS,
+)
+from .git_checker import (
+    GitCheckResult,
+    GitChecker,
+    LeakedSecret,
+    SecretSeverity,
+    SecretType,
 )
 
 __all__ = [
-    # 版本
+    # 版本信息
     "__version__",
-    # 扫描器
-    "EnvScanner",
-    "LeakScanner",
-    "scan_env_files",
-    # 数据类
-    "SensitiveEntry",
-    "ScanResult",
-    "SensitivityLevel",
     # 常量
-    "SENSITIVE_KEY_PATTERNS",
+    "SENSITIVE_PATTERNS",
     "LEAK_PATTERNS",
-    "HIGH_RISK_KEYWORDS",
-    "ENV_FILENAME_PATTERNS",
+    "ENV_FILENAMES",
+    "HIGH_RISK_PATTERNS",
+    "SEVERITY_LEVELS",
+    "SEVERITY_COLORS",
+    # Git 检查器
+    "GitChecker",
+    "GitCheckResult",
+    "LeakedSecret",
+    "SecretType",
+    "SecretSeverity",
 ]
