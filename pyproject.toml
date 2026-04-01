@@ -5,29 +5,28 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "env-guard"
 version = "0.1.0"
-description = "Git 敏感信息泄露检测与修复工具"
+description = "Git sensitive information leak detection and remediation tool"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
 authors = [
-    {name = "env-guard contributors"}
+    {name = "Developer"}
 ]
-keywords = ["git", "security", "env", "secrets", "detection", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Security",
-    "Topic :: Software Development :: Version Control :: Git",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
     "click>=8.0.0",
+    "gitpython>=3.1.0",
     "rich>=13.0.0",
 ]
 
@@ -37,51 +36,23 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
-    "gitpython>=3.1.0",
 ]
 
 [project.scripts]
 env-guard = "env_guard.cli:main"
 
-[project.urls]
-Homepage = "https://github.com/env-guard/env-guard"
-Repository = "https://github.com/env-guard/env-guard"
-Documentation = "https://github.com/env-guard/env-guard#readme"
-Issues = "https://github.com/env-guard/env-guard/issues"
-
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-env_guard = ["py.typed"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py39"
 
 [tool.ruff.lint]
-select = [
-    "E",      # pycodestyle errors
-    "W",      # pycodestyle warnings
-    "F",      # Pyflakes
-    "I",      # isort
-    "UP",     # pyupgrade
-    "B",      # flake8-bugbear
-    "C4",     # flake8-comprehensions
-]
-ignore = [
-    "E501",   # line too long (handled by formatter)
-]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
 
 [tool.mypy]
 python_version = "3.9"
-strict = false
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = false
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short"
+disallow_untyped_defs = true
