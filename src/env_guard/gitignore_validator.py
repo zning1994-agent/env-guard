@@ -1,229 +1,320 @@
-"""Gitignore 配置验证器"""
+"""env-guard .gitignore 验证器"""
+
+from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from env_guard.constants import REQUIRED_GITIGNORE_RULES
-
-
-class ValidationStatus(Enum):
-    """验证状态"""
-    VALID = "valid"
-    MISSING = "missing"
-    INCORRECT = "incorrect"
-    PARTIAL = "partial"
-
-
-@dataclass
-class RuleValidation:
-    """单条规则验证结果"""
-    pattern: str
-    status: ValidationStatus
-    exists: bool = False
-    is_correct: bool = False
-    actual_pattern: Optional[str] = None
-    suggestion: Optional[str] = None
-
-
-@dataclass
-class ValidationResult:
-    """验证结果"""
-    file_path: Path
-    rules: list[RuleValidation] = field(default_factory=list)
-    is_complete: bool = False
-    missing_rules: list[str] = field(default_factory=list)
-    incorrect_rules: list[str] = field(default_factory=list)
-    extra_rules: list[str] = field(default_factory=list)  # 额外添加的 .env 相关规则
-    overall_status: ValidationStatus = ValidationStatus.MISSING
-    
-    @property
-    def score(self) -> int:
-        """计算配置完整度分数 (0-100)"""
-        if not self.rules:
-            return 0
-        correct = sum(1 for r in self.rules if r.is_correct)
-        return int(correct / len(self.rules) * 100)
-    
-    @property
-    def has_issues(self) -> bool:
-        return bool(self.missing_rules or self.incorrect_rules)
-
-
-@dataclass
-class ValidationSummary:
-    """验证汇总"""
-    total_repos_checked: int = 0
-    fully_configured: int = 0
-    partially_configured: int = 0
-    not_configured: int = 0
-    total_missing_rules: int = 0
+from env_guard.models import (
+    ValidationIssue,
+    ValidationResult,
+    ValidationStatus,
+)
 
 
 class GitignoreValidator:
-    """Gitignore 配置验证器"""
-    
-    def __init__(self, required_rules: Optional[list[str]] = None):
-        """
-        初始化验证器
-        
-        Args:
-            required_rules: 必须包含的规则列表
-        """
-        self._required_rules = required_rules or REQUIRED_GITIGNORE_RULES
-        # 标准化规则（去除特殊字符）
-        self._normalized_rules = [self._normalize_pattern(r) for r in self._required_rules]
-    
-    def _normalize_pattern(self, pattern: str) -> str:
-        """标准化规则模式"""
-        # 移除常见的通配符差异
-        pattern = pattern.replace(".", r"\.")
-        return pattern
-    
+    """验证 .gitignore 配置"""
+
+    # 需要被 .gitignore 排除的 .env 相关文件模式
+    REQUIRED_PATTERNS: list[str] = [
+        ".env",
+        ".env.local",
+        ".env.*.local",
+    ]
+
+    # 敏感文件模式
+    SENSITIVE_PATTERNS: list[str] = [
+        "*.pem",
+        "*.key",
+        "credentials.json",
+        "secrets.yaml",
+        "*.secret",
+    ]
+
+    # 可能意外提交的配置文件
+    CONFIG_PATTERNS: list[str] = [
+        "config.py",
+        "settings.py",
+        "*.config.js",
+        "*.config.ts",
+    ]
+
+    def __init__(self) -> None:
+        self._env_pattern = re.compile(r"^\.env(\..+)?$|\.env(\..+)?\.local$")
+
     def validate(self, root: Path) -> ValidationResult:
-        """
-        验证 .gitignore 配置
-        
+        """验证 .gitignore 配置
+
         Args:
             root: 项目根目录
-            
+
         Returns:
             ValidationResult: 验证结果
         """
         gitignore_path = root / ".gitignore"
-        result = ValidationResult(file_path=gitignore_path)
-        
+        issues: list[ValidationIssue] = []
+        checked_files: list[str] = []
+
+        # 检查 .gitignore 是否存在
         if not gitignore_path.exists():
-            # .gitignore 不存在
-            result.overall_status = ValidationStatus.MISSING
-            for rule in self._required_rules:
-                result.rules.append(RuleValidation(
-                    pattern=rule,
+            issues.append(
+                ValidationIssue(
+                    rule="gitignore_exists",
                     status=ValidationStatus.MISSING,
-                    suggestion=f"Add '{rule}' to .gitignore"
-                ))
-                result.missing_rules.append(rule)
+                    message=".gitignore 文件不存在",
+                    file_path=str(gitignore_path),
+                    suggestion=self._generate_gitignore_suggestion(),
+                )
+            )
+            # 即使没有 .gitignore，也检查是否有 .env 文件需要保护
+            result = ValidationResult(
+                is_valid=False,
+                issues=issues,
+                checked_files=checked_files,
+            )
+            self._check_env_files_without_gitignore(root, issues)
             return result
-        
-        # 读取 .gitignore 内容
+
+        checked_files.append(str(gitignore_path))
+
+        # 读取并解析 .gitignore
         try:
-            with open(gitignore_path, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f.readlines()]
+            content = gitignore_path.read_text(encoding="utf-8")
+            lines = [
+                line.strip()
+                for line in content.split("\n")
+                if line.strip() and not line.strip().startswith("#")
+            ]
         except Exception as e:
-            result.overall_status = ValidationStatus.INCORRECT
-            return result
-        
-        # 分析每条必需规则
-        found_rules: dict[str, bool] = {}
-        
-        for rule in self._required_rules:
-            normalized_rule = self._normalize_pattern(rule)
-            found = False
-            actual_pattern = None
-            
-            for line in lines:
-                # 跳过注释和空行
-                if not line or line.startswith("#"):
-                    continue
-                
-                # 精确匹配或通配符匹配
-                if line == rule or line == normalized_rule:
-                    found = True
-                    actual_pattern = line
-                    break
-                elif self._pattern_matches(line, rule):
-                    found = True
-                    actual_pattern = line
-                    break
-            
-            status = ValidationStatus.VALID if found else ValidationStatus.MISSING
-            result.rules.append(RuleValidation(
-                pattern=rule,
-                status=status,
-                exists=found,
-                is_correct=found,
-                actual_pattern=actual_pattern,
-            ))
-            
-            if not found:
-                result.missing_rules.append(rule)
-            
-            found_rules[rule] = found
-        
-        # 查找其他 .env 相关规则（用户可能添加了额外的）
-        env_pattern = re.compile(r"\.env|env\.|\.envelope")
+            issues.append(
+                ValidationIssue(
+                    rule="gitignore_readable",
+                    status=ValidationStatus.INVALID,
+                    message=f"无法读取 .gitignore: {e}",
+                    file_path=str(gitignore_path),
+                )
+            )
+            return ValidationResult(is_valid=False, issues=issues)
+
+        # 检查 .env 相关规则
+        self._check_env_patterns(lines, issues)
+
+        # 检查敏感文件规则
+        self._check_sensitive_patterns(lines, issues)
+
+        # 检查配置文件的忽略规则
+        self._check_config_patterns(lines, issues)
+
+        # 检查是否有排除 .env 但又强制添加的情况
+        self._check_negated_patterns(lines, issues, content)
+
+        # 检查项目中的 .env 文件
+        env_files = self._find_env_files(root)
+        checked_files.extend([str(f) for f in env_files])
+
+        # 如果存在 .env 文件但没有被正确忽略
+        if env_files:
+            self._check_env_files_coverage(lines, env_files, issues)
+
+        is_valid = not any(
+            i.status in (ValidationStatus.INVALID, ValidationStatus.MISSING)
+            for i in issues
+        )
+
+        return ValidationResult(
+            is_valid=is_valid,
+            issues=issues,
+            checked_files=checked_files,
+        )
+
+    def _check_env_patterns(
+        self, lines: list[str], issues: list[ValidationIssue]
+    ) -> None:
+        """检查 .env 相关模式"""
+        has_basic_env = False
+        has_local = False
+
         for line in lines:
-            if not line or line.startswith("#"):
-                continue
-            if env_pattern.search(line):
-                # 检查是否在必需规则中
-                if not any(self._pattern_matches(line, r) for r in self._required_rules):
-                    result.extra_rules.append(line)
-        
-        # 确定整体状态
-        if result.missing_rules:
-            if result.extra_rules or any(r.exists for r in result.rules):
-                result.overall_status = ValidationStatus.PARTIAL
+            line_lower = line.lower()
+            # 检查基本 .env 规则
+            if self._env_pattern.match(line_lower):
+                has_basic_env = True
+            # 检查 .env.local 规则
+            if ".env.local" in line_lower or ".env.*.local" in line_lower:
+                has_local = True
+
+        if not has_basic_env:
+            issues.append(
+                ValidationIssue(
+                    rule="env_pattern",
+                    status=ValidationStatus.INVALID,
+                    message="缺少 .env 文件的忽略规则",
+                    suggestion='添加 ".env" 到 .gitignore',
+                )
+            )
+
+        if not has_local:
+            issues.append(
+                ValidationIssue(
+                    rule="env_local_pattern",
+                    status=ValidationStatus.WARNING,
+                    message="缺少 .env.local 文件的忽略规则",
+                    suggestion='添加 ".env.local" 或 ".env.*.local" 到 .gitignore',
+                )
+            )
+
+    def _check_sensitive_patterns(
+        self, lines: list[str], issues: list[ValidationIssue]
+    ) -> None:
+        """检查敏感文件模式"""
+        missing_patterns: list[str] = []
+
+        for pattern in self.SENSITIVE_PATTERNS:
+            pattern_lower = pattern.lower()
+            if not any(
+                pattern_lower in line.lower() for line in lines
+            ):
+                missing_patterns.append(pattern)
+
+        if missing_patterns:
+            issues.append(
+                ValidationIssue(
+                    rule="sensitive_patterns",
+                    status=ValidationStatus.WARNING,
+                    message=f"建议添加敏感文件的忽略规则: {', '.join(missing_patterns)}",
+                    suggestion="\n".join(f'添加 "{p}"' for p in missing_patterns),
+                )
+            )
+
+    def _check_config_patterns(
+        self, lines: list[str], issues: list[ValidationIssue]
+    ) -> None:
+        """检查配置文件模式"""
+        # 这是一个可选检查，不添加严重问题
+        pass
+
+    def _check_negated_patterns(
+        self,
+        lines: list[str],
+        issues: list[ValidationIssue],
+        full_content: str,
+    ) -> None:
+        """检查否定模式（如 !.env.example）"""
+        for line in lines:
+            if line.startswith("!"):
+                negated = line[1:]
+                if ".env" in negated.lower():
+                    issues.append(
+                        ValidationIssue(
+                            rule="negated_pattern",
+                            status=ValidationStatus.INVALID,
+                            message=f"发现否定模式 '{line}'，这可能导致敏感文件被提交",
+                            suggestion=f"移除 '{line}' 或确保不覆盖敏感文件规则",
+                        )
+                    )
+
+    def _check_env_files_coverage(
+        self,
+        lines: list[str],
+        env_files: list[Path],
+        issues: list[ValidationIssue],
+    ) -> None:
+        """检查 .env 文件是否被正确覆盖"""
+        # 简化检查：如果有 *.env* 或类似的通配符规则，应该没问题
+        has_wildcard = any("*" in line and ".env" in line.lower() for line in lines)
+
+        if not has_wildcard and env_files:
+            issues.append(
+                ValidationIssue(
+                    rule="env_files_coverage",
+                    status=ValidationStatus.WARNING,
+                    message=f"项目中存在 {len(env_files)} 个 .env 文件，请确保它们被正确忽略",
+                    file_path=", ".join(str(f) for f in env_files[:5]),
+                )
+            )
+
+    def _check_env_files_without_gitignore(
+        self, root: Path, issues: list[ValidationIssue]
+    ) -> None:
+        """在没有 .gitignore 的情况下检查 .env 文件"""
+        env_files = self._find_env_files(root)
+        if env_files:
+            issues.append(
+                ValidationIssue(
+                    rule="env_files_exist",
+                    status=ValidationStatus.CRITICAL,
+                    message=f"发现 {len(env_files)} 个 .env 文件，但 .gitignore 不存在！",
+                    file_path=", ".join(str(f) for f in env_files[:5]),
+                    suggestion=self._generate_gitignore_suggestion(),
+                )
+            )
+
+    def _find_env_files(self, root: Path) -> list[Path]:
+        """查找目录下的 .env 文件"""
+        env_files: list[Path] = []
+        patterns = [
+            ".env",
+            ".env.local",
+            ".env.*",
+            "*.env",
+        ]
+
+        for pattern in patterns:
+            if pattern.startswith("*"):
+                for path in root.rglob(pattern):
+                    if path.is_file() and path.name.startswith(".env"):
+                        env_files.append(path)
             else:
-                result.overall_status = ValidationStatus.MISSING
+                path = root / pattern
+                if path.exists() and path.is_file():
+                    env_files.append(path)
+
+        return list(set(env_files))  # 去重
+
+    def _generate_gitignore_suggestion(self) -> str:
+        """生成 .gitignore 建议内容"""
+        return """# .env files
+.env
+.env.local
+.env.*.local
+
+# Sensitive files
+*.pem
+*.key
+credentials.json
+secrets.yaml
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+"""
+
+    def generate_gitignore(self, root: Path) -> Path:
+        """生成标准的 .gitignore 文件"""
+        gitignore_path = root / ".gitignore"
+
+        # 读取现有的 .gitignore
+        existing_content = ""
+        if gitignore_path.exists():
+            try:
+                existing_content = gitignore_path.read_text(encoding="utf-8")
+            except Exception:
+                existing_content = ""
+
+        # 追加 env-guard 建议的规则
+        new_content = existing_content.rstrip("\n")
+
+        if new_content:
+            new_content += "\n\n# === env-guard additions ===\n"
         else:
-            result.overall_status = ValidationStatus.VALID
-        
-        result.is_complete = not result.missing_rules
-        
-        return result
-    
-    def _pattern_matches(self, line: str, rule: str) -> bool:
-        """检查 .gitignore 行是否匹配规则"""
-        # 精确匹配
-        if line == rule:
-            return True
-        
-        # 通配符匹配
-        # .env 匹配 .env, .env.local, .env.production 等
-        if rule == ".env":
-            if line == ".env" or line.startswith(".env."):
-                return True
-        elif rule == ".env.local":
-            if line == ".env.local":
-                return True
-        elif rule.startswith(".env.") and rule.endswith(".local"):
-            if line == rule:
-                return True
-        
-        return False
-    
-    def generate_recommendation(self, result: ValidationResult) -> str:
-        """
-        生成配置建议
-        
-        Args:
-            result: 验证结果
-            
-        Returns:
-            str: 建议内容
-        """
-        lines = ["# Recommended .gitignore rules for .env files:", ""]
-        
-        for rule in self._required_rules:
-            if rule not in result.missing_rules:
-                lines.append(f"# {rule} - OK")
-            else:
-                lines.append(f"{rule}  # MISSING - Recommended")
-        
-        if result.extra_rules:
-            lines.append("")
-            lines.append("# Extra .env rules found:")
-            for rule in result.extra_rules:
-                lines.append(f"# {rule} - Already configured")
-        
-        return "\n".join(lines)
+            new_content = "# === env-guard additions ===\n"
 
+        new_content += self._generate_gitignore_suggestion()
 
-# 便捷函数
-def validate_gitignore(path: Path) -> ValidationResult:
-    """验证 .gitignore 配置的便捷函数"""
-    validator = GitignoreValidator()
-    return validator.validate(path)
+        gitignore_path.write_text(new_content, encoding="utf-8")
+        return gitignore_path

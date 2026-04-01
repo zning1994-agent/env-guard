@@ -1,1 +1,1 @@
-"""Tests package."""
+"""env-guard 测试初始化"""

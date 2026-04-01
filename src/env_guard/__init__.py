@@ -1,20 +1,21 @@
-"""env-guard - Git sensitive information leak detection and remediation."""
+"""env-guard - Git 敏感信息泄露检测与修复 CLI 工具"""
 
 __version__ = "0.1.0"
-__author__ = "env-guard contributors"
+__author__ = "Developer"
 
-from env_guard.scanner import EnvScanner, SensitiveEntry
-from env_guard.git_checker import GitChecker, LeakedSecret
-from env_guard.gitignore_validator import GitignoreValidator, ValidationResult
-from env_guard.reporter import Reporter
+from env_guard.models import (
+    SensitivityLevel,
+    SensitiveEntry,
+    LeakResult,
+    ValidationResult,
+    ValidationStatus,
+)
 
 __all__ = [
     "__version__",
-    "EnvScanner",
+    "SensitivityLevel",
     "SensitiveEntry",
-    "GitChecker",
-    "LeakedSecret",
-    "GitignoreValidator",
+    "LeakResult",
     "ValidationResult",
-    "Reporter",
+    "ValidationStatus",
 ]

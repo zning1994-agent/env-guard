@@ -1,132 +1,113 @@
-"""Data models for env-guard."""
+"""env-guard 数据模型定义"""
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
-from env_guard.constants import SensitivityLevel
+
+class SensitivityLevel(Enum):
+    """敏感等级枚举"""
+
+    CRITICAL = "CRITICAL"  # 严重：直接泄露的密钥、token 等
+    HIGH = "HIGH"  # 高：密码、私钥等
+    MEDIUM = "MEDIUM"  # 中：API key、access key 等
+    LOW = "LOW"  # 低：可能包含敏感信息的配置
+
+
+class ValidationStatus(Enum):
+    """验证状态枚举"""
+
+    VALID = "valid"  # 配置正确
+    INVALID = "invalid"  # 配置错误
+    MISSING = "missing"  # 缺少配置
+    WARNING = "warning"  # 需要注意
 
 
 @dataclass
 class SensitiveEntry:
-    """Represents a detected sensitive entry in a file."""
+    """敏感信息条目"""
+
     key: str
-    value: str  # Masked value
+    value: str  # 敏感值，已自动遮蔽
     line_number: int
     sensitivity_level: SensitivityLevel
     matched_pattern: str
     file_path: str
-    raw_value_length: int = 0
-    
-    def __post_init__(self):
-        if self.raw_value_length == 0:
-            self.raw_value_length = len(self.value)
-    
-    def mask_value(self, show_chars: int = 4) -> str:
-        """Return a masked version of the value."""
-        if len(self.value) <= show_chars:
-            return "*" * len(self.value)
-        return self.value[:show_chars] + "*" * (len(self.value) - show_chars)
+
+    def __post_init__(self) -> None:
+        # 确保值被遮蔽
+        if len(self.value) > 4:
+            self.value = self.value[:2] + "*" * (len(self.value) - 4) + self.value[-2:]
+        else:
+            self.value = "*" * len(self.value)
 
 
 @dataclass
-class LeakedSecret:
-    """Represents a leaked secret found in git history or staged files."""
-    secret_type: str
-    matched_pattern: str
-    file_path: str
-    commit_hash: Optional[str] = None
-    commit_message: Optional[str] = None
-    commit_date: Optional[datetime] = None
-    author: Optional[str] = None
-    line_number: Optional[int] = None
-    content_preview: str = ""
-    severity: SensitivityLevel = SensitivityLevel.HIGH
-    
-    def __post_init__(self):
-        if self.severity == SensitivityLevel.HIGH:
-            if self.secret_type in ("openai_api_key", "github_pat", "aws_access_key"):
-                self.severity = SensitivityLevel.CRITICAL
+class LeakResult:
+    """泄露检测结果"""
 
-
-@dataclass
-class GitignoreIssue:
-    """Represents an issue found in .gitignore configuration."""
-    issue_type: str  # "missing", "incorrect", "redundant"
-    pattern: str
+    commit_hash: Optional[str]  # None 表示 staged files
+    commit_message: Optional[str]
     file_path: str
     line_number: int
+    content_preview: str  # 泄露内容预览，已遮蔽
+    matched_pattern: str
+    sensitivity_level: SensitivityLevel
+
+
+@dataclass
+class ValidationIssue:
+    """验证问题"""
+
+    rule: str
+    status: ValidationStatus
     message: str
+    file_path: Optional[str] = None
     suggestion: Optional[str] = None
 
 
 @dataclass
 class ValidationResult:
-    """Result of .gitignore validation."""
+    """验证结果"""
+
     is_valid: bool
-    issues: list[GitignoreIssue] = field(default_factory=list)
-    existing_env_patterns: list[str] = field(default_factory=list)
-    has_basic_protection: bool = False
-    has_local_protection: bool = False
-    
+    issues: list[ValidationIssue] = field(default_factory=list)
+    checked_files: list[str] = field(default_factory=list)
+
     @property
-    def total_issues(self) -> int:
-        return len(self.issues)
-    
+    def critical_count(self) -> int:
+        return sum(1 for i in self.issues if i.status == ValidationStatus.INVALID)
+
     @property
-    def has_critical_issues(self) -> bool:
-        return any(issue.issue_type == "missing" for issue in self.issues)
+    def warning_count(self) -> int:
+        return sum(1 for i in self.issues if i.status == ValidationStatus.WARNING)
 
 
 @dataclass
 class ScanResult:
-    """Result of a scan operation."""
-    scanned_files: int = 0
+    """扫描结果"""
+
+    scanned_files: list[str] = field(default_factory=list)
     sensitive_entries: list[SensitiveEntry] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    scan_time: float = 0.0
-    
-    @property
-    def total_findings(self) -> int:
-        return len(self.sensitive_entries)
-    
+    total_lines_scanned: int = 0
+
     @property
     def critical_count(self) -> int:
-        return sum(1 for e in self.sensitive_entries 
-                   if e.sensitivity_level == SensitivityLevel.CRITICAL)
-    
+        return sum(
+            1
+            for e in self.sensitive_entries
+            if e.sensitivity_level == SensitivityLevel.CRITICAL
+        )
+
     @property
     def high_count(self) -> int:
-        return sum(1 for e in self.sensitive_entries 
-                   if e.sensitivity_level == SensitivityLevel.HIGH)
+        return sum(
+            1
+            for e in self.sensitive_entries
+            if e.sensitivity_level == SensitivityLevel.HIGH
+        )
 
-
-@dataclass
-class CheckResult:
-    """Result of git check operation."""
-    staged_leaks: list[LeakedSecret] = field(default_factory=list)
-    history_leaks: list[LeakedSecret] = field(default_factory=list)
-    scanned_commits: int = 0
-    scan_time: float = 0.0
-    
     @property
-    def total_leaks(self) -> int:
-        return len(self.staged_leaks) + len(self.history_leaks)
-    
-    @property
-    def has_staged_leaks(self) -> bool:
-        return len(self.staged_leaks) > 0
-    
-    @property
-    def has_history_leaks(self) -> bool:
-        return len(self.history_leaks) > 0
-
-
-@dataclass
-class IntegrationConfig:
-    """Configuration for CI/hook integration."""
-    config_type: str  # "pre-commit", "github-actions", "gitlab-ci"
-    file_path: str
-    content: str
-    file_created: bool = False
+    def has_secrets(self) -> bool:
+        return len(self.sensitive_entries) > 0
