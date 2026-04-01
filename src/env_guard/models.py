@@ -6,79 +6,48 @@ from pathlib import Path
 from typing import Optional
 
 
-class SeverityLevel(Enum):
-    """严重程度等级"""
-    CRITICAL = "critical"
-    HIGH = "high"
-    MEDIUM = "medium"
+class Severity(Enum):
+    """严重程度枚举"""
     LOW = "low"
-    INFO = "info"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
 
 
 class SecretType(Enum):
-    """敏感信息类型"""
+    """敏感信息类型枚举"""
     API_KEY = "api_key"
     PASSWORD = "password"
     TOKEN = "token"
     PRIVATE_KEY = "private_key"
-    AWS_KEY = "aws_key"
-    DATABASE_CREDENTIAL = "database_credential"
-    UNKNOWN = "unknown"
+    DATABASE_CREDENTIALS = "database_credentials"
+    AWS_CREDENTIALS = "aws_credentials"
+    GENERIC_SECRET = "generic_secret"
+    SENSITIVE_VALUE = "sensitive_value"
 
 
 @dataclass
 class SensitiveEntry:
-    """敏感信息条目"""
-    key: str
-    value: str
+    """敏感条目"""
     file_path: Path
     line_number: int
-    secret_type: SecretType = SecretType.UNKNOWN
-    severity: SeverityLevel = SeverityLevel.MEDIUM
-    masked_value: str = ""
+    key: str
+    value_preview: str
+    severity: Severity = Severity.HIGH
+    secret_type: SecretType = SecretType.GENERIC_SECRET
+    suggestion: Optional[str] = None
 
-    def __post_init__(self) -> None:
-        """初始化后处理"""
-        if not self.masked_value:
-            self.masked_value = self._mask_value()
-
-    def _mask_value(self) -> str:
-        """掩码处理值"""
-        if len(self.value) <= 8:
-            return "*" * len(self.value)
-        # 显示前4后4，中间掩码
-        return f"{self.value[:4]}{'*' * (len(self.value) - 8)}{self.value[-4:]}"
-
-
-@dataclass
-class LeakedSecret:
-    """泄露的敏感信息"""
-    secret_type: SecretType
-    severity: SeverityLevel
-    file_path: Optional[Path] = None
-    commit_hash: Optional[str] = None
-    commit_message: Optional[str] = None
-    line_content: str = ""
-    matched_pattern: str = ""
-    remediation: str = ""
-
-    def __post_init__(self) -> None:
-        """初始化后处理"""
-        if not self.remediation:
-            self.remediation = self._get_default_remediation()
-
-    def _get_default_remediation(self) -> str:
-        """获取默认修复建议"""
-        remedies = {
-            SecretType.API_KEY: "立即轮换 API Key 并更新到安全存储（如 Vault 或云平台密钥管理）",
-            SecretType.PASSWORD: "立即更改密码并审查账户访问日志",
-            SecretType.TOKEN: "撤销泄露的 Token 并生成新的",
-            SecretType.PRIVATE_KEY: "撤销私钥并生成新的密钥对",
-            SecretType.AWS_KEY: "在 AWS IAM 控制台撤销密钥并创建新的访问密钥",
-            SecretType.DATABASE_CREDENTIAL: "更新数据库密码并检查是否有异常访问",
-            SecretType.UNKNOWN: "立即检查并移除暴露的敏感信息",
+    def to_dict(self) -> dict:
+        """转换为字典"""
+        return {
+            "file_path": str(self.file_path),
+            "line_number": self.line_number,
+            "key": self.key,
+            "value_preview": self.value_preview,
+            "severity": self.severity.value,
+            "secret_type": self.secret_type.value,
+            "suggestion": self.suggestion,
         }
-        return remedies.get(self.secret_type, "检查并移除暴露的敏感信息")
 
 
 @dataclass
@@ -86,26 +55,74 @@ class ValidationResult:
     """验证结果"""
     is_valid: bool
     file_path: Path
-    issues: list[str] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    recommendations: list[str] = field(default_factory=list)
+    message: str
+    rule_name: Optional[str] = None
+    suggestion: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """转换为字典"""
+        return {
+            "is_valid": self.is_valid,
+            "file_path": str(self.file_path),
+            "message": self.message,
+            "rule_name": self.rule_name,
+            "suggestion": self.suggestion,
+        }
 
 
 @dataclass
 class ScanResult:
-    """扫描结果汇总"""
-    total_files: int = 0
+    """扫描结果"""
+    file_path: Path
+    total_lines: int = 0
     sensitive_entries: list[SensitiveEntry] = field(default_factory=list)
-    high_risk_count: int = 0
-    medium_risk_count: int = 0
-    low_risk_count: int = 0
+    is_empty: bool = False
+    is_binary: bool = False
 
     @property
-    def has_issues(self) -> bool:
-        """是否有安全问题"""
-        return len(self.sensitive_entries) > 0
+    def risk_level(self) -> Severity:
+        """计算风险等级"""
+        if not self.sensitive_entries:
+            return Severity.LOW
+        max_severity = max(e.severity for e in self.sensitive_entries)
+        count = len(self.sensitive_entries)
+        if count >= 5 or max_severity == Severity.CRITICAL:
+            return Severity.CRITICAL
+        elif count >= 3 or max_severity == Severity.HIGH:
+            return Severity.HIGH
+        elif count >= 1 or max_severity == Severity.MEDIUM:
+            return Severity.MEDIUM
+        return Severity.LOW
 
-    @property
-    def critical_count(self) -> int:
-        """严重问题数量"""
-        return sum(1 for e in self.sensitive_entries if e.severity == SeverityLevel.CRITICAL)
+    def to_dict(self) -> dict:
+        """转换为字典"""
+        return {
+            "file_path": str(self.file_path),
+            "total_lines": self.total_lines,
+            "sensitive_entries": [e.to_dict() for e in self.sensitive_entries],
+            "is_empty": self.is_empty,
+            "is_binary": self.is_binary,
+            "risk_level": self.risk_level.value,
+        }
+
+
+@dataclass
+class GitignoreValidationResult:
+    """Gitignore 验证结果"""
+    path: Path
+    is_correct: bool
+    has_env_rules: bool
+    missing_rules: list[str] = field(default_factory=list)
+    incorrect_rules: list[str] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        """转换为字典"""
+        return {
+            "path": str(self.path),
+            "is_correct": self.is_correct,
+            "has_env_rules": self.has_env_rules,
+            "missing_rules": self.missing_rules,
+            "incorrect_rules": self.incorrect_rules,
+            "suggestions": self.suggestions,
+        }
